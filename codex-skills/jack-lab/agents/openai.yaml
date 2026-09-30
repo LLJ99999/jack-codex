@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jack Lab"
+  short_description: "Reproducible security research cases and evidence workspaces"
+  default_prompt: "Use $jack-lab to create a reproducible lab case for this technical research task."

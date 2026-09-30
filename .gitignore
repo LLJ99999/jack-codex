@@ -1,0 +1,40 @@
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+.electron-builder.*.json
+*.blockmap
+
+# 运行时产物
+logs/
+*.log
+install-state.json
+memory.json
+.env
+.env.local
+
+# 旧版 Python 工具遗留
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+build_log*.txt
+dist_nuitka/
+
+# 备份
+*.bak
+*.bak2
+*.spec.bak
+*.spec.orig
+*.db
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
