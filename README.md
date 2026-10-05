@@ -54,10 +54,10 @@ npm run dist
 
 产物写入 `release/`：
 
-- `Jack-Codex-Setup-<version>.exe`
-- `Jack-Codex-Portable-<version>.exe`
+- `Jack-Codex-win-<version>.zip`
+- `Jack-Codex-linux-<version>.tar.gz`
 
-NSIS 和便携卸载流程会先调用状态清单卸载，再移除应用自身文件。
+解压后直接运行应用。Windows 用 `Jack Codex 工具.exe`，Linux 用 `jack-codex`。卸载仍走应用内「卸载并恢复原配置」。
 
 ## 安全边界
 

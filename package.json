@@ -47,26 +47,16 @@
       { "from": "build/icon-256.png", "to": "icon.png" }
     ],
     "win": {
-      "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
-      ],
+      "target": [{ "target": "zip", "arch": ["x64"] }],
       "icon": "build/icon.png",
-      "signAndEditExecutable": false,
-      "signDlls": false
+      "signAndEditExecutable": false
     },
-    "portable": { "artifactName": "Jack-Codex-Portable-${version}.${ext}" },
-    "nsis": {
-      "artifactName": "Jack-Codex-Setup-${version}.${ext}",
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Jack Codex 工具",
-      "uninstallDisplayName": "Jack Codex 工具",
-      "deleteAppDataOnUninstall": true,
-      "include": "build/installer.nsh"
-    }
+    "linux": {
+      "target": [{ "target": "tar.gz", "arch": ["x64"] }],
+      "icon": "build/icon.png",
+      "category": "Utility",
+      "executableName": "jack-codex"
+    },
+    "artifactName": "Jack-Codex-${os}-${version}.${ext}"
   }
 }

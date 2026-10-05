@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,17 +28,30 @@ const buildConfig = {
   productName,
   directories: { ...((pkg.build && pkg.build.directories) || {}), output },
   afterPack: "scripts/after-pack.js",
-  win: {
-    ...((pkg.build && pkg.build.win) || {}),
-    signAndEditExecutable: false,
-    signDlls: false,
-    target: [{ target: "dir", arch: ["x64"] }],
-  },
+  ...(process.platform === "win32" ? {} : {
+    win: {
+      ...((pkg.build && pkg.build.win) || {}),
+      signAndEditExecutable: false,
+    },
+  }),
 };
 const configPath = join(appDir, ".electron-builder.jack.json");
 writeFileSync(configPath, JSON.stringify(buildConfig, null, 2) + "\n", "utf8");
+const builder = join(appDir, "node_modules", "electron-builder", "out", "cli", "cli.js");
+const outDir = join(appDir, output);
+
+function keepArchives() {
+  for (const name of readdirSync(outDir)) {
+    if (/\.(zip|tar\.gz)$/i.test(name)) continue;
+    rmSync(join(outDir, name), { recursive: true, force: true });
+  }
+}
+
 try {
-  runNode(join(appDir, "node_modules", "electron-builder", "out", "cli", "cli.js"), ["--win", "--publish", "never", "--config", configPath]);
+  runNode(builder, ["--win", "--x64", "--publish", "never", "--config", configPath]);
+  keepArchives();
+  runNode(builder, ["--linux", "--x64", "--publish", "never", "--config", configPath]);
+  keepArchives();
 } finally {
   rmSync(configPath, { force: true });
 }
