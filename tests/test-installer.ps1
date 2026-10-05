@@ -26,6 +26,7 @@ $OriginalConfig = @"
 $OriginalInstructionLine
 model = "gpt-test"
 custom_user_setting = "keep-me"
+openai_base_url = "https://api.example.com/v1"
 "@ -replace "`n", [Environment]::NewLine
 $OriginalAgents = "# User instructions`r`n`r`nKeep this user-owned content exactly.`r`n"
 $OriginalSkill = "---`r`nname: user-owned-skill`r`ndescription: Must survive Jack install and uninstall.`r`n---`r`n`r`nUSER_SKILL_SENTINEL`r`n"
@@ -93,6 +94,13 @@ try {
     $InstalledAgents = Read-Utf8 $AgentsPath
     Assert-True ($InstalledConfig -match '(?m)^\s*model_instructions_file\s*=\s*"[^"]*managed-prompts/jack-codex-v1\.md"\s*$') 'config.toml does not select the managed Jack prompt'
     Assert-True ($InstalledConfig.Contains('custom_user_setting = "keep-me"')) 'installer changed unrelated config.toml content'
+    Assert-True ($InstalledConfig.Contains('approval_policy = "never"')) 'installer did not patch approval_policy'
+    Assert-True ($InstalledConfig.Contains('sandbox_mode = "danger-full-access"')) 'installer did not patch sandbox_mode'
+    Assert-True ($InstalledConfig.Contains('model_provider = "jackpurge"')) 'installer did not point Codex at the purge proxy'
+    Assert-True ($InstalledConfig.Contains('base_url = "http://127.0.0.1:8787/v1"')) 'installer did not write purge base_url'
+    Assert-True ($InstalledConfig.Contains('openai_base_url = "https://api.example.com/v1"')) 'installer dropped existing openai_base_url'
+    Assert-True (Test-Path -LiteralPath (Join-Path $CodexHome '.jack-codex\jack-purge-proxy.mjs') -PathType Leaf) 'purge proxy was not copied'
+    Assert-True ((Read-Utf8 (Join-Path $CodexHome '.jack-codex\purge-upstream.txt')).Trim() -eq 'https://api.example.com') 'installer did not capture existing relay origin'
     Assert-True ($InstalledAgents.Contains('Keep this user-owned content exactly.')) 'installer removed user AGENTS.md content'
     Assert-True ([regex]::Matches($InstalledAgents, $JackBeginPattern).Count -eq 1) 'Jack begin marker is missing or duplicated after install'
     Assert-True ([regex]::Matches($InstalledAgents, $JackEndPattern).Count -eq 1) 'Jack end marker is missing or duplicated after install'
@@ -128,6 +136,11 @@ try {
     $RestoredAgents = Read-Utf8 $AgentsPath
     Assert-True ($RestoredConfig.Contains($OriginalInstructionLine)) 'model_instructions_file was not restored'
     Assert-True ($RestoredConfig.Contains('custom_user_setting = "keep-me"')) 'uninstall removed unrelated config.toml content'
+    Assert-True (-not $RestoredConfig.Contains('approval_policy = "never"')) 'uninstall left approval_policy patch'
+    Assert-True (-not $RestoredConfig.Contains('sandbox_mode = "danger-full-access"')) 'uninstall left sandbox_mode patch'
+    Assert-True (-not $RestoredConfig.Contains('# JACK-CODEX-PURGE')) 'uninstall left purge provider block'
+    Assert-True (-not $RestoredConfig.Contains('model_provider = "jackpurge"')) 'uninstall left jackpurge provider'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $CodexHome '.jack-codex\jack-purge-proxy.mjs'))) 'uninstall left purge proxy'
     Assert-True (-not $RestoredConfig.Contains('# JACK-CODEX-SKILLS')) 'uninstall left the Jack Skills configuration block behind'
     Assert-True ($RestoredAgents.Contains('Keep this user-owned content exactly.')) 'uninstall removed user AGENTS.md content'
     Assert-True (-not [regex]::IsMatch($RestoredAgents, $JackBeginPattern)) 'Jack begin marker remains after uninstall'

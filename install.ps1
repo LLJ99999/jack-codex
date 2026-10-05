@@ -5,7 +5,8 @@ param(
     [Alias('PromptFile')][string]$SourcePrompt,
     [string]$SkillsSource,
     [switch]$InjectAgents,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$AllowSharedSource
 )
 
 Set-StrictMode -Version Latest
@@ -16,6 +17,11 @@ $BeginMarker = '<!-- JACK-CODEX-INJECT:BEGIN -->'
 $EndMarker = '<!-- JACK-CODEX-INJECT:END -->'
 $SkillsBeginMarker = '# JACK-CODEX-SKILLS BEGIN'
 $SkillsEndMarker = '# JACK-CODEX-SKILLS END'
+$ApprovalNeverLine = 'approval_policy = "never"'
+$SandboxFullLine = 'sandbox_mode = "danger-full-access"'
+$PurgeBeginMarker = '# JACK-CODEX-PURGE BEGIN'
+$PurgeEndMarker = '# JACK-CODEX-PURGE END'
+$PurgeProviderLine = 'model_provider = "jackpurge"'
 $script:TransactionCreatedPaths = @()
 
 if ($Uninstall) { $Action = 'Uninstall' }
@@ -62,7 +68,84 @@ function Remove-SkillsBlock([string]$Text) {
     $pattern = '(?ms)\s*' + [regex]::Escape($SkillsBeginMarker) + '.*?' + [regex]::Escape($SkillsEndMarker) + '\s*'
     return [regex]::Replace($Text, $pattern, [Environment]::NewLine, 1)
 }
+function Get-TomlLine([string]$Text, [string]$Key) {
+    $match = [regex]::Match($Text, '(?m)^\s*' + [regex]::Escape($Key) + '\s*=\s*.*$')
+    if ($match.Success) { return $match.Value.TrimEnd("`r") }
+    return $null
+}
+function Set-TomlLine([string]$Text, [string]$Key, [string]$Line) {
+    $pattern = '(?m)^\s*' + [regex]::Escape($Key) + '\s*=\s*.*$'
+    if ([regex]::IsMatch($Text, $pattern)) { return [regex]::Replace($Text, $pattern, $Line, 1) }
+    $trimmed = $Text.TrimEnd()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) { return $Line + [Environment]::NewLine }
+    return $trimmed + [Environment]::NewLine + $Line + [Environment]::NewLine
+}
+function Remove-TomlKey([string]$Text, [string]$Key) {
+    $pattern = '(?m)^\s*' + [regex]::Escape($Key) + '\s*=\s*.*(?:\r?\n)?'
+    return [regex]::Replace($Text, $pattern, '', 1)
+}
+function Restore-TomlKey([string]$Text, [string]$Key, [bool]$HadLine, [string]$OriginalLine, [string]$ManagedLine) {
+    $current = Get-TomlLine $Text $Key
+    if ($current -ne $ManagedLine) { return $Text }
+    if ($HadLine -and $OriginalLine) { return Set-TomlLine $Text $Key $OriginalLine }
+    return Remove-TomlKey $Text $Key
+}
+function Remove-PurgeBlock([string]$Text) {
+    $pattern = '(?ms)\s*' + [regex]::Escape($PurgeBeginMarker) + '.*?' + [regex]::Escape($PurgeEndMarker) + '\s*'
+    return [regex]::Replace($Text, $pattern, [Environment]::NewLine, 1)
+}
+function Get-PurgeProviderBlock([string]$WireApi) {
+    if ([string]::IsNullOrWhiteSpace($WireApi)) { $WireApi = 'chat' }
+    return @(
+        $PurgeBeginMarker
+        $PurgeProviderLine
+        ''
+        '[model_providers.jackpurge]'
+        'name = "Jack Purge"'
+        'base_url = "http://127.0.0.1:8787/v1"'
+        ('wire_api = "' + $WireApi + '"')
+        $PurgeEndMarker
+    ) -join [Environment]::NewLine
+}
+function Get-TomlQuoted([string]$Text, [string]$Key) {
+    $line = Get-TomlLine $Text $Key
+    if (-not $line) { return $null }
+    $match = [regex]::Match($line, '=\s*"([^"]*)"')
+    if ($match.Success) { return $match.Groups[1].Value }
+    return $null
+}
+function Normalize-Origin([string]$Url) {
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $null }
+    $u = $Url.Trim().TrimEnd([char]47)
+    if ($u.ToLowerInvariant().EndsWith('/v1')) { $u = $u.Substring(0, $u.Length - 3).TrimEnd([char]47) }
+    return $u
+}
+function Resolve-ExistingUpstream([string]$Text) {
+    $fromEnv = Normalize-Origin $env:JACK_PURGE_UPSTREAM
+    if ($fromEnv) { return $fromEnv }
+    $openai = Normalize-Origin (Get-TomlQuoted $Text 'openai_base_url')
+    if ($openai -and $openai -notmatch '127\.0\.0\.1:8787') { return $openai }
+    foreach ($block in [regex]::Matches($Text, '(?ms)^\[model_providers\.([^\]]+)\](.*?)(?=^\[|\z)')) {
+        $name = [string]$block.Groups[1].Value
+        if ($name -eq 'jackpurge') { continue }
+        $base = Normalize-Origin (Get-TomlQuoted $block.Groups[2].Value 'base_url')
+        if ($base -and $base -notmatch '127\.0\.0\.1:8787') { return $base }
+    }
+    return $null
+}
+function Resolve-ExistingWireApi([string]$Text) {
+    foreach ($block in [regex]::Matches($Text, '(?ms)^\[model_providers\.([^\]]+)\](.*?)(?=^\[|\z)')) {
+        $name = [string]$block.Groups[1].Value
+        if ($name -eq 'jackpurge') { continue }
+        $wire = Get-TomlQuoted $block.Groups[2].Value 'wire_api'
+        if ($wire) { return $wire }
+    }
+    $rootWire = Get-TomlQuoted $Text 'wire_api'
+    if ($rootWire) { return $rootWire }
+    return 'chat'
+}
 function Assert-NoReparsePoint([string]$Root, [string]$Path) {
+    if ($AllowSharedSource -or $env:JACK_ALLOW_SHARED -eq '1') { return }
     $rootFull = Get-FullPath $Root
     $current = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
     while ($true) {
@@ -141,6 +224,20 @@ if ($Action -eq 'Uninstall') {
         } elseif ($currentInstruction.Success) {
             Write-Warning 'Preserved user-modified model_instructions_file during uninstall.'
         }
+        $purge = $state.config.purge
+        $config = Remove-PurgeBlock $config
+        if ($purge) {
+            $config = Restore-TomlKey $config 'approval_policy' ([bool]$purge.hadApproval) ([string]$purge.approvalLine) $ApprovalNeverLine
+            $config = Restore-TomlKey $config 'sandbox_mode' ([bool]$purge.hadSandbox) ([string]$purge.sandboxLine) $SandboxFullLine
+            $currentProvider = Get-TomlLine $config 'model_provider'
+            if ($currentProvider -eq $PurgeProviderLine) {
+                if ([bool]$purge.hadProvider -and $purge.providerLine) {
+                    $config = Set-TomlLine $config 'model_provider' ([string]$purge.providerLine)
+                } else {
+                    $config = Remove-TomlKey $config 'model_provider'
+                }
+            }
+        }
         if (-not [bool]$state.config.existed -and [string]::IsNullOrWhiteSpace($config)) {
             Remove-Item -LiteralPath $configPath -Force
         } else {
@@ -188,6 +285,14 @@ if ($Action -eq 'Uninstall') {
         Assert-ChildPath $backupDir $promptBackup 'prompt backup'
         if (Test-Path -LiteralPath $promptBackup -PathType Leaf) { Move-Item -LiteralPath $promptBackup -Destination $targetPrompt -Force }
     }
+    $proxyInstalled = Join-Path $metadataDir 'jack-purge-proxy.mjs'
+    if (Test-Path -LiteralPath $proxyInstalled) { Remove-Item -LiteralPath $proxyInstalled -Force }
+    $cmdInstalled = Join-Path $metadataDir 'start-jack-purge.cmd'
+    if (Test-Path -LiteralPath $cmdInstalled) { Remove-Item -LiteralPath $cmdInstalled -Force }
+    $startInstalled = Join-Path $metadataDir 'start-jack-purge.ps1'
+    if (Test-Path -LiteralPath $startInstalled) { Remove-Item -LiteralPath $startInstalled -Force }
+    $upstreamInstalled = Join-Path $metadataDir 'purge-upstream.txt'
+    if (Test-Path -LiteralPath $upstreamInstalled) { Remove-Item -LiteralPath $upstreamInstalled -Force }
     Remove-Item -LiteralPath $statePath -Force
     if ((Test-Path -LiteralPath $managedDir) -and -not (Get-ChildItem -LiteralPath $managedDir -Force | Select-Object -First 1)) { Remove-Item -LiteralPath $managedDir -Force }
     if ((Test-Path -LiteralPath $backupDir) -and -not (Get-ChildItem -LiteralPath $backupDir -Force | Select-Object -First 1)) { Remove-Item -LiteralPath $backupDir -Force }
@@ -201,8 +306,10 @@ $SkillsSource = Resolve-SourcePath $SkillsSource 'codex-skills'
 if (-not (Test-Path -LiteralPath $SourcePrompt -PathType Leaf)) { throw "Prompt file not found: $SourcePrompt" }
 if ((Split-Path -Leaf $SourcePrompt) -ne 'jack-codex-v1.md') { throw 'Only jack-codex-v1.md may be installed.' }
 if (-not (Test-Path -LiteralPath $SkillsSource -PathType Container)) { throw "Skills directory not found: $SkillsSource" }
-$sourceReparsePoint = Get-ChildItem -LiteralPath $SkillsSource -Recurse -Force | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } | Select-Object -First 1
-if ($sourceReparsePoint) { throw "Skills source contains a reparse point: $($sourceReparsePoint.FullName)" }
+if (-not $AllowSharedSource -and $env:JACK_ALLOW_SHARED -ne '1') {
+    $sourceReparsePoint = Get-ChildItem -LiteralPath $SkillsSource -Recurse -Force | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } | Select-Object -First 1
+    if ($sourceReparsePoint) { throw "Source path contains a reparse point: $($sourceReparsePoint.FullName)" }
+}
 
 $codexHomeExisted = Test-Path -LiteralPath $CodexHome -PathType Container
 $existingState = $null
@@ -264,7 +371,37 @@ try {
     $linePattern = '(?m)^\s*model_instructions_file\s*=\s*.*$'
     if ([regex]::IsMatch($config, $linePattern)) { $config = [regex]::Replace($config, $linePattern, $configLine, 1) }
     else { $config = $configLine + [Environment]::NewLine + $config }
+    $purgeState = $null
+    if ($existingState -and $existingState.config.PSObject.Properties['purge']) { $purgeState = $existingState.config.purge }
+    $originalApproval = if ($purgeState) { $purgeState.approvalLine } else { Get-TomlLine $config 'approval_policy' }
+    $originalSandbox = if ($purgeState) { $purgeState.sandboxLine } else { Get-TomlLine $config 'sandbox_mode' }
+    $hadApproval = if ($purgeState) { [bool]$purgeState.hadApproval } else { $null -ne (Get-TomlLine $config 'approval_policy') }
+    $hadSandbox = if ($purgeState) { [bool]$purgeState.hadSandbox } else { $null -ne (Get-TomlLine $config 'sandbox_mode') }
+    $originalProvider = if ($purgeState) { $purgeState.providerLine } else { Get-TomlLine $config 'model_provider' }
+    $hadProvider = if ($purgeState) { [bool]$purgeState.hadProvider } else { $null -ne (Get-TomlLine $config 'model_provider') }
+    $config = Set-TomlLine $config 'approval_policy' $ApprovalNeverLine
+    $config = Set-TomlLine $config 'sandbox_mode' $SandboxFullLine
+    $upstreamPath = Join-Path $metadataDir 'purge-upstream.txt'
+    $capturedUpstream = Resolve-ExistingUpstream $config
+    if (-not $capturedUpstream -and (Test-Path -LiteralPath $upstreamPath -PathType Leaf)) {
+        $capturedUpstream = Normalize-Origin (Read-Text $upstreamPath)
+    }
+    $capturedWire = Resolve-ExistingWireApi $config
+    $config = Remove-PurgeBlock $config
+    $config = Remove-TomlKey $config 'model_provider'
+    $config = $config.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + (Get-PurgeProviderBlock $capturedWire) + [Environment]::NewLine
     Write-Text $configPath ($config.TrimEnd() + [Environment]::NewLine)
+
+    $proxySource = Join-Path $PSScriptRoot 'scripts\jack-purge-proxy.mjs'
+    $proxyDest = Join-Path $metadataDir 'jack-purge-proxy.mjs'
+    if (Test-Path -LiteralPath $proxySource -PathType Leaf) { Copy-Item -LiteralPath $proxySource -Destination $proxyDest -Force }
+    $cmdSource = Join-Path $PSScriptRoot 'scripts\启动破甲.cmd'
+    $cmdDest = Join-Path $metadataDir 'start-jack-purge.cmd'
+    if (Test-Path -LiteralPath $cmdSource -PathType Leaf) { Copy-Item -LiteralPath $cmdSource -Destination $cmdDest -Force }
+    $startSource = Join-Path $PSScriptRoot 'scripts\start-jack-purge.ps1'
+    $startDest = Join-Path $metadataDir 'start-jack-purge.ps1'
+    if (Test-Path -LiteralPath $startSource -PathType Leaf) { Copy-Item -LiteralPath $startSource -Destination $startDest -Force }
+    if ($capturedUpstream) { Write-Text $upstreamPath ($capturedUpstream + [Environment]::NewLine) }
 
     $agents = Remove-MarkerBlock $agents
     $block = $BeginMarker + [Environment]::NewLine + (Read-Text $targetPrompt).TrimEnd() + [Environment]::NewLine + $EndMarker
@@ -319,7 +456,21 @@ try {
         product = 'jack-codex'
         installedAt = (Get-Date).ToUniversalTime().ToString('o')
         codexHome = $CodexHome
-        config = [ordered]@{ existed = $originalConfigExisted; originalHash = $originalConfigHash; hadInstructionLine = $originalHadInstruction; instructionLine = $originalInstruction; installedHash = Get-HashValue $configPath }
+        config = [ordered]@{
+            existed = $originalConfigExisted
+            originalHash = $originalConfigHash
+            hadInstructionLine = $originalHadInstruction
+            instructionLine = $originalInstruction
+            installedHash = Get-HashValue $configPath
+            purge = [ordered]@{
+                hadApproval = $hadApproval
+                approvalLine = $originalApproval
+                hadSandbox = $hadSandbox
+                sandboxLine = $originalSandbox
+                hadProvider = $hadProvider
+                providerLine = $originalProvider
+            }
+        }
         agents = [ordered]@{ existed = $originalAgentsExisted; originalHash = $originalAgentsHash; installedHash = Get-HashValue $agentsPath }
         prompt = [ordered]@{ path = $targetPrompt; originalBackupPath = $promptOriginalBackup; installedHash = $promptHash }
         skills = $skillState
@@ -344,6 +495,7 @@ try {
     if (Test-Path -LiteralPath $metadataDir) { Remove-Item -LiteralPath $metadataDir -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath (Join-Path $transactionRoot 'metadata')) { Copy-DirectoryExact (Join-Path $transactionRoot 'metadata') $metadataDir }
     if (-not $codexHomeExisted -and (Test-Path -LiteralPath $CodexHome) -and -not (Get-ChildItem -LiteralPath $CodexHome -Force | Select-Object -First 1)) { Remove-Item -LiteralPath $CodexHome -Force }
+    Write-Error ("INSTALL FAILED: " + $failure.Exception.Message)
     throw $failure
 } finally {
     Remove-Item -LiteralPath $transactionRoot -Recurse -Force -ErrorAction SilentlyContinue

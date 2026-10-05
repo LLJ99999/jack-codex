@@ -73,7 +73,12 @@ export function App() {
     setInstalled(result.installed || {});
     if (result.ok) { setStatus(`${shown} 安装成功 · 重启 Codex 后生效`); setLevel("ok"); }
     else if (result.timedOut) { setStatus("安装超时，进程已终止"); setLevel("err"); }
-    else { setStatus(`安装失败：${result.error || `退出码 ${result.code}`}`); setLevel("err"); }
+    else {
+      const detail = (result.error || result.out || `退出码 ${result.code}`).trim().split(/\r?\n/).filter(Boolean).slice(-3).join(" / ");
+      setStatus(`安装失败：${detail}`);
+      setLevel("err");
+      if (result.out) setLogText(result.out);
+    }
     setBusy(false); reloadSkills();
   }, [reloadSkills]);
   const runUninstall = useCallback(async () => {

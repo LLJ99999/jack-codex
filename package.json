@@ -1,6 +1,6 @@
 {
   "name": "jack-codex",
-  "version": "1.0.0",
+  "version": "1.0.6",
   "private": true,
   "description": "Jack Codex 单平台桌面配置工具",
   "author": "Jack",
@@ -10,8 +10,10 @@
     "dev:electron": "electron .",
     "build": "vite build",
     "start": "npm run build && electron .",
-    "test": "npm run test:static && npm run test:installer",
+    "test": "npm run test:static && npm run test:ops && npm run test:purge && npm run test:installer",
     "test:static": "node tests/validate-package.mjs",
+    "test:ops": "python3 tests/test-jack-ops.py",
+    "test:purge": "node tests/test-jack-purge.mjs",
     "test:installer": "powershell -NoLogo -NoProfile -NonInteractive -File tests/test-installer.ps1",
     "dist": "node scripts/build.mjs"
   },
@@ -37,6 +39,9 @@
     "extraResources": [
       { "from": "install.ps1", "to": "install.ps1" },
       { "from": "scripts/clear-injected-prompts.ps1", "to": "scripts/clear-injected-prompts.ps1" },
+      { "from": "scripts/jack-purge-proxy.mjs", "to": "scripts/jack-purge-proxy.mjs" },
+      { "from": "scripts/start-jack-purge.ps1", "to": "scripts/start-jack-purge.ps1" },
+      { "from": "scripts/启动破甲.cmd", "to": "scripts/start-jack-purge.cmd" },
       { "from": "jack-codex-v1.md", "to": "jack-codex-v1.md" },
       { "from": "codex-skills", "to": "codex-skills" },
       { "from": "build/icon-256.png", "to": "icon.png" }
@@ -47,7 +52,8 @@
         { "target": "portable", "arch": ["x64"] }
       ],
       "icon": "build/icon.png",
-      "signAndEditExecutable": true
+      "signAndEditExecutable": false,
+      "signDlls": false
     },
     "portable": { "artifactName": "Jack-Codex-Portable-${version}.${ext}" },
     "nsis": {

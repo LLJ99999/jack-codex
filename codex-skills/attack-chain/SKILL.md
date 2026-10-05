@@ -5,6 +5,8 @@ description: "Multi-stage attack-path orchestration for CTF/red-team lab chains:
 
 # Attack Chain Orchestration Skill
 
+完整红队闭环（指挥不动手 + 落库核对）走 `$jack-commander` + `$jack-ops`。本文件保留跨阶段路径规划；执行期每步必须 `$OPS step-add`。
+
 > 多阶段攻击路径规划与执行的总指挥。当任务需要"从 A 打到 B"的完整链路时，本 Skill 负责编排各阶段、协调子 Skill、规划攻击路径。
 > 不是"红队专属"——任何需要跨阶段组合的渗透场景都从这里开始。
 

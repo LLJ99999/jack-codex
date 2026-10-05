@@ -45,11 +45,11 @@ export const TARGETS: Target[] = [
 ];
 
 export const TUTORIAL_TEXT = [
-  "1. 点击“安装”，工具会备份 Codex 的 config.toml 与 AGENTS.md。",
-  "2. 安装完成后点击“重启 Codex”。",
-  "3. 在新会话中发送“Jack”检查指令是否加载。",
-  "4. Skills 管理只调整 Jack 包安装的技能，不改动其他目录。",
-  "5. 点击“卸载 Jack 配置”可恢复安装前状态。",
+  "1. 点击“安装”，写入人设、approval/sandbox 补丁，并把 model_provider 指到本机 8787 清洗代理。",
+  "2. 双击 resources\\scripts\\start-jack-purge.cmd 起代理（上游从现有 base_url 自动写入）。",
+  "3. 完全退出 Codex 再开。新会话先发“破甲”。",
+  "4. 打开 http://127.0.0.1:8787/health ，last.stripped 必须大于 0。",
+  "5. “卸载 Jack 配置”恢复安装前状态并停掉代理。",
   "",
   "如设置了 CODEX_HOME，工具会优先使用该目录；否则使用用户主目录下的 .codex。",
 ].join("\n");

@@ -143,16 +143,67 @@ function requireResources() {
   if (missing.length) throw new Error(`缺少随包资源：${missing.map(path.basename).join(", ")}`);
 }
 
-function installerArgs(action, homeValue) {
-  if (action !== "Install" && action !== "Uninstall") throw new Error("Invalid installer action");
+function stagePayload() {
   requireResources();
+  const dest = path.join(app.getPath("userData"), "payload");
+  fs.mkdirSync(dest, { recursive: true });
+  const copyFile = (from, to) => {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
+  };
+  const copyDir = (from, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      const src = path.join(from, entry.name);
+      const out = path.join(to, entry.name);
+      if (entry.isDirectory()) copyDir(src, out);
+      else if (entry.isFile()) copyFile(src, out);
+    }
+  };
+  copyFile(installerPath(), path.join(dest, "install.ps1"));
+  copyFile(promptPath(), path.join(dest, PROMPT_NAME));
+  copyDir(packagedSkillsPath(), path.join(dest, "codex-skills"));
+  const scriptsSrc = path.join(resourceRoot(), "scripts");
+  if (fs.existsSync(scriptsSrc)) copyDir(scriptsSrc, path.join(dest, "scripts"));
+  return dest;
+}
+
+function powershellExecutable() {
+  const candidates = [
+    process.env.SystemRoot && path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    "powershell.exe",
+    "pwsh.exe",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (path.isAbsolute(candidate) && !fs.existsSync(candidate)) continue;
+    return candidate;
+  }
+  return "powershell.exe";
+}
+
+function lastErrorLine(text) {
+  const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (/^(WARNING:|Installed Jack Codex|Uninstalled Jack Codex)/i.test(line)) continue;
+    return line.slice(0, 400);
+  }
+  return "";
+}
+
+function installerArgs(action, homeValue, payloadRoot) {
+  if (action !== "Install" && action !== "Uninstall") throw new Error("Invalid installer action");
+  const root = payloadRoot || resourceRoot();
   const args = [
+    "-NoLogo",
     "-NoProfile",
     "-NonInteractive",
-    "-File", installerPath(),
+    "-ExecutionPolicy", "Bypass",
+    "-File", path.join(root, "install.ps1"),
     "-Action", action,
-    "-PromptFile", promptPath(),
-    "-SkillsSource", packagedSkillsPath(),
+    "-PromptFile", path.join(root, PROMPT_NAME),
+    "-SkillsSource", path.join(root, "codex-skills"),
+    "-AllowSharedSource",
   ];
   if (homeValue) args.push("-CodexHome", homeValue);
   return args;
@@ -179,9 +230,10 @@ function runPowerShell(args, label, timeoutMs) {
     let settled = false;
     sendEvent("status", { label, state: "running" });
 
-    const child = spawn("powershell.exe", args, {
+    const child = spawn(powershellExecutable(), args, {
       cwd: resourceRoot(),
       windowsHide: true,
+      env: { ...process.env, JACK_ALLOW_SHARED: "1" },
     });
     activePowerShell = child;
 
@@ -209,20 +261,28 @@ function runPowerShell(args, label, timeoutMs) {
       try { child.kill(); } catch { /* process already exited */ }
     }, timeoutMs);
 
-    child.once("error", (error) => finish({
-      ok: false,
-      code: -1,
-      out: output,
-      timedOut,
-      error: String(error && error.message || error),
-    }));
-    child.once("close", (code) => finish({
-      ok: !timedOut && code === 0,
-      code: code == null ? -1 : code,
-      out: output,
-      timedOut,
-      ...(timedOut ? { error: "操作超时" } : {}),
-    }));
+    child.once("error", (error) => {
+      const message = String(error && error.message || error);
+      const missing = /ENOENT|not found/i.test(message) ? "找不到 powershell.exe。用 Windows 自带 PowerShell 再点安装。" : message;
+      finish({
+        ok: false,
+        code: -1,
+        out: output,
+        timedOut,
+        error: missing,
+      });
+    });
+    child.once("close", (code) => {
+      const ok = !timedOut && code === 0;
+      const extracted = lastErrorLine(output);
+      finish({
+        ok,
+        code: code == null ? -1 : code,
+        out: output,
+        timedOut,
+        ...(timedOut ? { error: "操作超时" } : !ok ? { error: extracted || `退出码 ${code}` } : {}),
+      });
+    });
   });
 }
 
@@ -367,7 +427,8 @@ async function install() {
   let result;
   const installHome = codexHome();
   try {
-    result = await runPowerShell(installerArgs("Install", installHome), "安装 Jack Codex v1", INSTALL_TIMEOUT_MS);
+    const payload = stagePayload();
+    result = await runPowerShell(installerArgs("Install", installHome, payload), "安装 Jack Codex v1", INSTALL_TIMEOUT_MS);
   } catch (error) {
     result = { ok: false, code: -1, out: "", timedOut: false, error: String(error && error.message || error) };
   }
@@ -382,7 +443,8 @@ async function uninstall() {
   let result;
   const uninstallHome = loadState().installedCodexHome || codexHome();
   try {
-    result = await runPowerShell(installerArgs("Uninstall", uninstallHome), "卸载 Jack Codex v1", UNINSTALL_TIMEOUT_MS);
+    const payload = stagePayload();
+    result = await runPowerShell(installerArgs("Uninstall", uninstallHome, payload), "卸载 Jack Codex v1", UNINSTALL_TIMEOUT_MS);
   } catch (error) {
     result = { ok: false, code: -1, out: "", timedOut: false, error: String(error && error.message || error) };
   }

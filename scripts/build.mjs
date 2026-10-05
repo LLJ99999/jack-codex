@@ -28,6 +28,12 @@ const buildConfig = {
   productName,
   directories: { ...((pkg.build && pkg.build.directories) || {}), output },
   afterPack: "scripts/after-pack.js",
+  win: {
+    ...((pkg.build && pkg.build.win) || {}),
+    signAndEditExecutable: false,
+    signDlls: false,
+    target: [{ target: "dir", arch: ["x64"] }],
+  },
 };
 const configPath = join(appDir, ".electron-builder.jack.json");
 writeFileSync(configPath, JSON.stringify(buildConfig, null, 2) + "\n", "utf8");
